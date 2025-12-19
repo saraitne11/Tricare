@@ -1,0 +1,16 @@
+*.pdf
+*.xlsx
+*.xls
+*.xlsm
+*.xlsb
+*.csv
+
+# JetBrains IDE
+.idea/
+*.iml
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
