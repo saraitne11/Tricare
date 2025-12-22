@@ -1,5 +1,8 @@
 import io
 import datetime as dt
+import tempfile
+import zipfile
+import shutil
 from pathlib import Path
 
 import pandas as pd
@@ -57,20 +60,85 @@ def _render_results(df_pdf: pd.DataFrame, df_excel: pd.DataFrame, matched: int, 
         )
 
 
+def _cleanup_temp_dirs():
+    temp_dirs = st.session_state.get("temp_dirs", [])
+    for d in temp_dirs:
+        try:
+            shutil.rmtree(d, ignore_errors=True)
+        except Exception:
+            pass
+    st.session_state["temp_dirs"] = []
+
+
 def main():
     st.set_page_config(page_title="PT 차트 매칭 도구", layout="wide")
     st.title("PT 차트 매칭 도구")
-    st.write("왼쪽 사이드바에서 경로 입력 또는 업로드를 설정한 뒤 실행하세요.")
+    st.write("왼쪽 사이드바에서 PDF/엑셀 입력 방식을 선택한 뒤 실행하세요.")
 
     default_sheet = "Jun 30 _ Jul 5"
     default_cols = "A:G"
 
+    if "temp_dirs" not in st.session_state:
+        st.session_state.temp_dirs = []
+
     with st.sidebar:
         st.header("입력 설정")
-        st.caption("경로를 절대경로로 입력해 주세요.")
+        st.caption("PDF와 엑셀 입력 방식을 선택하세요.")
 
-        pdf_dir = st.text_input("PDF 폴더 절대경로", value=st.session_state.get("pdf_dir", ""), key="pdf_dir")
-        input_xlsx = st.text_input("입력 엑셀 절대경로", value=st.session_state.get("input_xlsx", ""), key="input_xlsx")
+        pdf_mode = st.radio(
+            "PDF 입력 방식",
+            ["경로 스캔 (재귀)", "ZIP 업로드", "절대경로 입력"],
+            key="pdf_mode",
+        )
+        pdf_zip = None
+        pdf_dir_input = None
+        if pdf_mode == "경로 스캔 (재귀)":
+            st.text_area(
+                "PDF 루트 경로 (여러 줄 입력 가능)",
+                value=st.session_state.get("pdf_paths_raw", ""),
+                placeholder=r"C:\data\pt\pdf_root",
+                key="pdf_paths_raw",
+                height=90,
+                help="여러 경로를 입력하면 모두 재귀적으로 스캔합니다.",
+            )
+        elif pdf_mode == "ZIP 업로드":
+            pdf_zip = st.file_uploader(
+                "PDF ZIP 업로드",
+                type=["zip"],
+                accept_multiple_files=False,
+                key="pdf_zip_upload",
+                help="ZIP 내 모든 PDF를 자동으로 풀어 처리합니다.",
+            )
+        else:
+            pdf_dir_input = st.text_input(
+                "PDF 폴더 절대경로 (기존 방식)",
+                value=st.session_state.get("pdf_dir_input", ""),
+                key="pdf_dir_input",
+                placeholder=r"C:\data\pt\pdf_root",
+            )
+
+        excel_mode = st.radio(
+            "엑셀 입력 방식",
+            ["파일 업로드", "절대경로 입력"],
+            horizontal=True,
+            key="excel_mode",
+        )
+        excel_file = None
+        excel_path_input = None
+        if excel_mode == "파일 업로드":
+            excel_file = st.file_uploader(
+                "입력 엑셀 업로드",
+                type=["xlsx", "xls"],
+                accept_multiple_files=False,
+                key="excel_file_upload",
+            )
+        else:
+            excel_path_input = st.text_input(
+                "입력 엑셀 절대경로 (기존 방식)",
+                value=st.session_state.get("excel_path_input", ""),
+                key="excel_path_input",
+                placeholder=r"C:\data\pt\input.xlsx",
+            )
 
         sheet_name = st.text_input("시트명", value=default_sheet, key="sheet_name")
         columns = st.text_input("열 범위 (예: A:G)", value=default_cols, key="columns")
@@ -87,32 +155,73 @@ def main():
         st.session_state.stop_requested = False
     if "run_ts" not in st.session_state:
         st.session_state.run_ts = ""
+    if "pdf_paths_raw" not in st.session_state:
+        st.session_state.pdf_paths_raw = ""
 
     if stop_clicked:
         st.session_state.stop_requested = True
         st.warning("중지 요청됨: 다음 작업 지점에서 중단합니다.")
 
     if run_clicked:
-        if not pdf_dir:
-            st.error("PDF 폴더 절대경로를 입력해 주세요.")
-            return
-        if not input_xlsx:
-            st.error("입력 엑셀 절대경로를 입력해 주세요.")
-            return
+        # 이전 임시 폴더 정리
+        _cleanup_temp_dirs()
+
+        resolved_pdf_dir: str | list[str] | None = None
+        resolved_xlsx: str | None = None
+
+        if pdf_mode == "경로 스캔 (재귀)":
+            pdf_lines = [p.strip() for p in st.session_state.get("pdf_paths_raw", "").splitlines() if p.strip()]
+            if not pdf_lines:
+                st.error("PDF 루트 경로를 한 줄 이상 입력해 주세요.")
+                return
+            resolved_pdf_dir = pdf_lines if len(pdf_lines) > 1 else pdf_lines[0]
+        elif pdf_mode == "ZIP 업로드":
+            if not pdf_zip:
+                st.error("PDF ZIP 파일을 업로드해 주세요.")
+                return
+            tmp_dir = Path(tempfile.mkdtemp(prefix="tricare_pdf_zip_"))
+            try:
+                with zipfile.ZipFile(pdf_zip) as zf:
+                    zf.extractall(tmp_dir)
+            except zipfile.BadZipFile:
+                st.error("올바른 ZIP 파일이 아닙니다.")
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                return
+            resolved_pdf_dir = str(tmp_dir)
+            st.session_state.temp_dirs.append(tmp_dir)
+        else:
+            pdf_dir_value = st.session_state.get("pdf_dir_input", "")
+            if not pdf_dir_value:
+                st.error("PDF 폴더 절대경로를 입력해 주세요.")
+                return
+            resolved_pdf_dir = pdf_dir_value
+
+        if excel_mode == "파일 업로드":
+            if not excel_file:
+                st.error("입력 엑셀 파일을 업로드해 주세요.")
+                return
+            tmp_dir = Path(tempfile.mkdtemp(prefix="tricare_excel_"))
+            excel_path = tmp_dir / excel_file.name
+            excel_path.write_bytes(excel_file.getvalue())
+            resolved_xlsx = str(excel_path)
+            st.session_state.temp_dirs.append(tmp_dir)
+        else:
+            xlsx_value = st.session_state.get("excel_path_input", "")
+            if not xlsx_value:
+                st.error("입력 엑셀 절대경로를 입력해 주세요.")
+                return
+            resolved_xlsx = xlsx_value
 
         st.session_state.log_lines = []
         st.session_state.results = None
         st.session_state.run_ts = dt.datetime.now().strftime("%Y%m%d%H%M%S")
         st.session_state.stop_requested = False
 
-        # status_badge = st.empty()  # 상태 배지 사용을 원하면 주석을 해제하세요.
-
         progress = st.progress(0.0, text="대기 중")
         status_box = st.expander("로그 메시지", expanded=False)
         status_log_placeholder = status_box.empty()
 
         def render_status_logs():
-            # 200px 높이, 내부 스크롤 적용
             html = """
             <div style="height:200px; overflow-y:auto; background:#f0f0f0; color:#111;
                         padding:8px; border-radius:4px; font-family:monospace;
@@ -122,7 +231,6 @@ def main():
 
         def append_log(msg: str):
             st.session_state.log_lines.append(msg)
-            # 최근 500줄만 유지
             st.session_state.log_lines = st.session_state.log_lines[-500:]
             render_status_logs()
 
@@ -130,28 +238,23 @@ def main():
             pct = done / total if total else 1
             progress.progress(pct, text=f"{done}/{total} 처리 중: {file.name} (rows={rows})")
             parent_name = file.parent.name or file.parent
-            msg = f"{done}/{total} | {parent_name}\{file.name} | rows={rows}"
+            msg = f"{done}/{total} | {parent_name}\\{file.name} | rows={rows}"
             append_log(msg)
 
         try:
             with st.spinner("처리 중..."):
                 df_pdf, df_excel, matched = run_matching(
-                    pdf_dir=pdf_dir or None,
-                    input_xlsx=input_xlsx or None,
+                    pdf_dir=resolved_pdf_dir,
+                    input_xlsx=resolved_xlsx,
                     sheet_name=sheet_name,
                     columns=columns,
                     progress_cb=on_progress,
                     stop_flag=lambda: st.session_state.get("stop_requested", False),
                 )
             st.session_state.results = (df_pdf, df_excel, matched)
-            # 실행 시점 타임스탬프를 결과와 함께 유지
-            # if status_badge:
-            #     status_badge.success("완료")
             append_log(f"완료 - 매칭 성공: {matched}건")
         except Exception as e:
             err_msg = f"오류: {e}"
-            # if status_badge:
-            #     status_badge.error("실패")
             st.error(err_msg)
             append_log(err_msg)
             return

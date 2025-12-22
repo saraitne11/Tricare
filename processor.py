@@ -9,7 +9,7 @@ import fitz
 import pandas as pd
 
 HEADER = re.compile(r"Dr\.?\s*Joung[`'’]?s\s*Clinic\s*&\s*Physical\s*Therapy\s*Center")
-VISIT_NO = re.compile(r"#\s*([0-9\s]+/\s*[0-9]+)")
+VISIT_NO = re.compile(r"#\s*([0-9]+\s*(?:/\s*[0-9]+)?)")
 AUTH_NO = re.compile(r"\(\s*(AT-[^)]+)\s*\)")
 
 target_fields = [
@@ -122,7 +122,7 @@ def parse_pdf(pdf_path: str) -> List[Dict[str, Any]]:
 
 
 def run_matching(
-    pdf_dir: str | None,
+    pdf_dir: str | list[str] | None,
     input_xlsx: str | None,
     sheet_name: str,
     columns: str,
@@ -134,10 +134,19 @@ def run_matching(
     if not input_xlsx:
         raise ValueError("입력 엑셀 경로가 필요합니다.")
 
-    root_dir = _ensure_abs_path(pdf_dir, "dir")
+    pdf_dirs: List[Path] = []
+    if isinstance(pdf_dir, (list, tuple)):
+        pdf_dirs = [_ensure_abs_path(p, "dir") for p in pdf_dir if p]
+    else:
+        pdf_dirs = [_ensure_abs_path(pdf_dir, "dir")]
+    if not pdf_dirs:
+        raise ValueError("PDF 폴더 경로가 필요합니다.")
+
     input_path = _ensure_abs_path(input_xlsx, "file")
 
-    pdf_list = list(root_dir.rglob("*.pdf"))
+    pdf_list: List[Path] = []
+    for root_dir in pdf_dirs:
+        pdf_list.extend(root_dir.rglob("*.pdf"))
     total = len(pdf_list)
     data: List[Dict[str, Any]] = []
 
