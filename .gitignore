@@ -18,3 +18,5 @@ env/
 .backup/
 
 __pycache__/
+build/
+dist/
