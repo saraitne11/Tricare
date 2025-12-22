@@ -17,3 +17,4 @@ env/
 # Local backups
 .backup/
 
+__pycache__/
