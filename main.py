@@ -7,6 +7,18 @@ from pathlib import Path
 
 from typing import List, Dict, Any
 
+
+# --- 사용자 설정 -------------------------------------------------
+PDF_DRI = r"C:\Users\10391\Documents\Workspaces\Tricare\data\pt-charts\PT chart (Jun. 30 - Jul. 5)(200개)(249)".replace("\\", "/")  # PDF가 들어 있는 최상위 폴더
+INPUT_XLSX = r"C:\Users\10391\Documents\Workspaces\Tricare\data\pt-list\pt list.xlsx".replace("\\", "/")
+SHEET_NAME = "Jun 30 _ Jul 5"
+COLUMNS = "A:G"
+
+PT_LIST_MERGE_XLSX = r"pt_list_merge.xlsx"
+PDF_SUMMARY_XLSX = r"pdf_summary.xlsx"
+# ----------------------------------------------------------------
+
+
 HEADER = re.compile(r"Dr\.?\s*Joung[`'’]?s\s*Clinic\s*&\s*Physical\s*Therapy\s*Center")
 VISIT_NO = re.compile(r"#\s*([0-9\s]+/\s*[0-9]+)")
 AUTH_NO = re.compile(r"\(\s*(AT-[^)]+)\s*\)")
@@ -41,6 +53,15 @@ def convert_dos(date_str) -> str:
     except ValueError:
         return ""
 
+
+def normalize_spaces(text: pd.Series) -> pd.Series:
+    """
+    Collapse whitespace (tabs/newlines/multiple spaces) to a single space, strip ends,
+    and keep original NaN as missing (avoid turning them into the literal 'nan').
+    """
+    is_na = text.isna()
+    cleaned = text.astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
+    return cleaned.where(~is_na, "")
 
 
 def extract_data(df: pd.DataFrame, pdf_path: str) -> dict[Any, Any] | None:
@@ -125,7 +146,7 @@ def parse_pdf(pdf_path: str) -> List[Dict[str, Any]]:
 
 if __name__ == '__main__':
 
-    root_dir = Path("C:\\Users\\10391\Documents\Workspaces\Tricare\PT chart (Jun. 30 - Jul. 5)(200개)(249)")
+    root_dir = Path(PDF_DRI)
     pdf_list = list(root_dir.rglob("*.pdf"))
 
     data = []
@@ -135,15 +156,15 @@ if __name__ == '__main__':
         print(f"%d/%d, File: %s, rows: %d" % (i + 1, len(pdf_list), file, len(rows)))
 
     df_pdf = pd.DataFrame(data)
-
-    INPUT_XLSX = r"pt list.xlsx"
-    SHEET_NAME = "Jun 30 _ Jul 5"
-    COLUMNS = "A:G"
+    # 공백/개행/탭을 통일해서 매칭 실패를 줄인다
+    for col in ["Patient Name", "Diagnosis/CC", "Authorization No"]:
+        if col in df_pdf.columns:
+            df_pdf[col] = normalize_spaces(df_pdf[col])
 
     df_excel = pd.read_excel(INPUT_XLSX, sheet_name=SHEET_NAME, usecols=COLUMNS)
-    df_excel["Weekly pt. tx list"] = df_excel["Weekly pt. tx list"].str.strip()
-    df_excel["Diagnosis"] = df_excel["Diagnosis"].str.strip()
-    df_excel["Authorization number"] = df_excel["Authorization number"].str.strip()
+    df_excel["Weekly pt. tx list"] = normalize_spaces(df_excel["Weekly pt. tx list"])
+    df_excel["Diagnosis"] = normalize_spaces(df_excel["Diagnosis"])
+    df_excel["Authorization number"] = normalize_spaces(df_excel["Authorization number"])
     df_excel["Date of birth"] = pd.to_datetime(df_excel["Date of birth"]).dt.strftime("%Y-%m-%d")
     df_excel["Date of Therapy"] = pd.to_datetime(df_excel["Date of Therapy"]).dt.strftime("%Y-%m-%d")
     df_excel["Visit No"] = ""
@@ -165,8 +186,12 @@ if __name__ == '__main__':
             df_excel.loc[idx, "File"] = retrieve["File"]
             cnt += 1
 
-    df_excel.to_excel("pt_list_merge_2.xlsx", index=False)
-    print(f"원본 엑셀 {len(df_excel)}건, 매칭된 데이터 {cnt}건 → {"pt_list_merge_2.xlsx"}")
+
+    df_pdf.to_excel(PDF_SUMMARY_XLSX, index=False)
+    print(f"PDF 데이터 {len(df_pdf)}건 → {PDF_SUMMARY_XLSX}")
+
+    df_excel.to_excel(PT_LIST_MERGE_XLSX, index=False)
+    print(f"원본 엑셀 {len(df_excel)}건, 매칭된 데이터 {cnt}건 → {PT_LIST_MERGE_XLSX}")
 
     # file_path = "../PT chart (Jun. 30 - Jul. 5)(200개)(249)/PT chart - Justin/PT chart_Misheff_Kenai_July_3_AT-0001361137.pdf"  # Validity Date (s) 부분 2줄
     # file_path = "PT chart (Jun. 30 - Jul. 5)(200개)(249)/PT chart - Soyeon/PT chart_Kinkade_Jeremy_July_1_3.pdf"  # 테이블 2개
