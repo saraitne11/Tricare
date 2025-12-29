@@ -12,6 +12,14 @@ HEADER = re.compile(r"Dr\.?\s*Joung[`'’]?s\s*Clinic\s*&\s*Physical\s*Therapy\s
 VISIT_NO = re.compile(r"#\s*([0-9]+\s*(?:/\s*[0-9]+)?)")
 AUTH_NO = re.compile(r"\(\s*(AT-[^)]+)\s*\)")
 
+REQUIRED_EXCEL_COLS = [
+    "Weekly pt. tx list",
+    "Date of birth",
+    "Diagnosis",
+    "Authorization number",
+    "Date of Therapy",
+]
+
 target_fields = [
     {"name": "Patient Name", "pattern": r"\s*Patient\s*Name\s*"},
     {"name": "DOB", "pattern": r"\s*DOB\s*"},
@@ -55,6 +63,34 @@ def normalize_spaces(text: pd.Series) -> pd.Series:
     is_na = text.isna()
     cleaned = text.astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
     return cleaned.where(~is_na, "")
+
+
+def _read_excel_with_header_detection(
+    input_path: Path, sheet_name: str, usecols: str
+) -> pd.DataFrame:
+    """
+    의미 없는 상단 행이 있어도 실제 헤더가 있는 행을 찾아서 DataFrame을 생성한다.
+    요구 헤더: REQUIRED_EXCEL_COLS
+    """
+    df_raw = pd.read_excel(input_path, sheet_name=sheet_name, usecols=usecols, header=None)
+
+    def _is_header_row(row: pd.Series) -> bool:
+        values = [str(v).strip().lower() for v in row.tolist() if pd.notna(v)]
+        return all(any(val == req.lower() for val in values) for req in REQUIRED_EXCEL_COLS)
+
+    header_idx = None
+    for idx, row in df_raw.iterrows():
+        if _is_header_row(row):
+            header_idx = idx
+            break
+    if header_idx is None:
+        raise ValueError("엑셀에서 필요한 헤더 행을 찾지 못했습니다. (Weekly pt. tx list 등)")
+
+    header_values = [str(v).strip() if pd.notna(v) else "" for v in df_raw.iloc[header_idx].tolist()]
+    df_excel = df_raw.iloc[header_idx + 1 :].copy()
+    df_excel.columns = header_values
+    df_excel = df_excel.dropna(how="all")  # 전체 빈 행 제거
+    return df_excel
 
 
 def extract_data(df: pd.DataFrame, pdf_path: str) -> dict[Any, Any] | None:
@@ -164,7 +200,7 @@ def run_matching(
         if col in df_pdf.columns:
             df_pdf[col] = normalize_spaces(df_pdf[col])
 
-    df_excel = pd.read_excel(input_path, sheet_name=sheet_name, usecols=columns)
+    df_excel = _read_excel_with_header_detection(input_path, sheet_name=sheet_name, usecols=columns)
     df_excel["Weekly pt. tx list"] = normalize_spaces(df_excel["Weekly pt. tx list"])
     df_excel["Diagnosis"] = normalize_spaces(df_excel["Diagnosis"])
     df_excel["Authorization number"] = normalize_spaces(df_excel["Authorization number"])
@@ -179,7 +215,7 @@ def run_matching(
             (df_pdf["Patient Name"] == row["Weekly pt. tx list"]) &
             (df_pdf["DOB"] == row["Date of birth"]) &
             (df_pdf["Diagnosis/CC"] == row["Diagnosis"]) &
-            (df_pdf["Authorization No"] == row["Authorization number"]) &
+            # (df_pdf["Authorization No"] == row["Authorization number"]) &
             (df_pdf["DOS"] == row["Date of Therapy"])
         ]
         if len(retrieves) == 1:

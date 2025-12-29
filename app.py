@@ -70,6 +70,31 @@ def _cleanup_temp_dirs():
     st.session_state["temp_dirs"] = []
 
 
+def _extract_zip_recursive(zip_file: Path, dest_dir: Path, max_depth: int = 3) -> None:
+    """ZIP 내부에 중첩된 ZIP이 있을 때까지 안전하게 풀어준다."""
+    dest_dir = dest_dir.resolve()
+    queue: list[tuple[Path, int]] = [(zip_file, 0)]
+
+    def _safe_extract(zf: zipfile.ZipFile) -> None:
+        for info in zf.infolist():
+            target = (dest_dir / info.filename).resolve()
+            if not str(target).startswith(str(dest_dir)):
+                raise ValueError("ZIP 내 경로가 대상 폴더 밖으로 벗어납니다.")
+        zf.extractall(dest_dir)
+
+    while queue:
+        src, depth = queue.pop()
+        if depth > max_depth:
+            raise ValueError("ZIP 중첩 깊이 한도를 초과했습니다.")
+        with zipfile.ZipFile(src) as zf:
+            _safe_extract(zf)
+            for info in zf.infolist():
+                if info.filename.lower().endswith(".zip"):
+                    nested = dest_dir / info.filename
+                    if nested.is_file():
+                        queue.append((nested, depth + 1))
+
+
 def main():
     st.set_page_config(page_title="PT 차트 매칭 도구", layout="wide")
     st.title("PT 차트 매칭 도구")
@@ -80,6 +105,8 @@ def main():
 
     if "temp_dirs" not in st.session_state:
         st.session_state.temp_dirs = []
+    if "pdf_mode" not in st.session_state:
+        st.session_state.pdf_mode = "ZIP 업로드"
 
     with st.sidebar:
         st.header("입력 설정")
@@ -87,7 +114,8 @@ def main():
 
         pdf_mode = st.radio(
             "PDF 입력 방식",
-            ["경로 스캔 (재귀)", "ZIP 업로드", "절대경로 입력"],
+            ["ZIP 업로드", "경로 스캔 (재귀)", "절대경로 입력"],
+            index=0,
             key="pdf_mode",
         )
         pdf_zip = None
@@ -181,10 +209,11 @@ def main():
                 return
             tmp_dir = Path(tempfile.mkdtemp(prefix="tricare_pdf_zip_"))
             try:
-                with zipfile.ZipFile(pdf_zip) as zf:
-                    zf.extractall(tmp_dir)
-            except zipfile.BadZipFile:
-                st.error("올바른 ZIP 파일이 아닙니다.")
+                upload_zip_path = tmp_dir / (pdf_zip.name or "upload.zip")
+                upload_zip_path.write_bytes(pdf_zip.getvalue())
+                _extract_zip_recursive(upload_zip_path, tmp_dir, max_depth=5)
+            except (zipfile.BadZipFile, ValueError) as e:
+                st.error(f"ZIP 해제 실패: {e}")
                 shutil.rmtree(tmp_dir, ignore_errors=True)
                 return
             resolved_pdf_dir = str(tmp_dir)
