@@ -196,6 +196,11 @@ def run_matching(
 
     df_pdf = pd.DataFrame(data)
 
+    # Drop unused columns after matching
+    for col in ("Times", "Therapist"):
+        if col in df_pdf.columns:
+            df_pdf = df_pdf.drop(columns=col)
+
     for col in ["Patient Name", "Diagnosis/CC", "Authorization No"]:
         if col in df_pdf.columns:
             df_pdf[col] = normalize_spaces(df_pdf[col])
@@ -223,6 +228,35 @@ def run_matching(
             df_excel.loc[idx, "Visit No"] = retrieve["Visit No"]
             df_excel.loc[idx, "File"] = retrieve["File"]
             cnt += 1
+
+    # Drop unused columns and reorder for final output
+    drop_cols = [c for c in ("Times", "Therapist") if c in df_excel.columns]
+    if drop_cols:
+        df_excel = df_excel.drop(columns=drop_cols)
+
+    # Format date columns for final output
+    if "Date of birth" in df_excel.columns:
+        dob_dt = pd.to_datetime(df_excel["Date of birth"], errors="coerce")
+        df_excel["Date of birth"] = (
+            dob_dt.dt.strftime("%b %d, %Y")
+            .str.replace(r"^([A-Za-z]+) 0", r"\1 ", regex=True)
+        )
+    if "Date of Therapy" in df_excel.columns:
+        dos_dt = pd.to_datetime(df_excel["Date of Therapy"], errors="coerce")
+        df_excel["Date of Therapy"] = dos_dt.dt.strftime("%Y.%m.%d")
+
+    desired_order = [
+        "Weekly pt. tx list",
+        "Authorization number",
+        "Date of Therapy",
+        "Visit No",
+        "Diagnosis",
+        "Date of birth",
+        "File",
+    ]
+    existing_cols = [c for c in desired_order if c in df_excel.columns]
+    if existing_cols:
+        df_excel = df_excel[existing_cols]
 
     return df_pdf, df_excel, cnt
 
