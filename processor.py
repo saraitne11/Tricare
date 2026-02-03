@@ -65,6 +65,13 @@ def normalize_spaces(text: pd.Series) -> pd.Series:
     return cleaned.where(~is_na, "")
 
 
+def strip_all_spaces(text: pd.Series) -> pd.Series:
+    """Remove all whitespace characters for comparison purposes."""
+    is_na = text.isna()
+    cleaned = text.astype(str).str.replace(r"\s+", "", regex=True)
+    return cleaned.where(~is_na, "")
+
+
 def _read_excel_with_header_detection(
     input_path: Path, sheet_name: str, usecols: str
 ) -> pd.DataFrame:
@@ -214,14 +221,25 @@ def run_matching(
     df_excel["Visit No"] = ""
     df_excel["File"] = ""
 
+    # Precompute space-stripped comparison keys
+    pdf_name_cmp = strip_all_spaces(df_pdf["Patient Name"]) if "Patient Name" in df_pdf.columns else pd.Series([""] * len(df_pdf), index=df_pdf.index)
+    pdf_dob_cmp = strip_all_spaces(df_pdf["DOB"]) if "DOB" in df_pdf.columns else pd.Series([""] * len(df_pdf), index=df_pdf.index)
+    pdf_diag_cmp = strip_all_spaces(df_pdf["Diagnosis/CC"]) if "Diagnosis/CC" in df_pdf.columns else pd.Series([""] * len(df_pdf), index=df_pdf.index)
+    pdf_dos_cmp = strip_all_spaces(df_pdf["DOS"]) if "DOS" in df_pdf.columns else pd.Series([""] * len(df_pdf), index=df_pdf.index)
+
+    excel_name_cmp = strip_all_spaces(df_excel["Weekly pt. tx list"])
+    excel_dob_cmp = strip_all_spaces(df_excel["Date of birth"])
+    excel_diag_cmp = strip_all_spaces(df_excel["Diagnosis"])
+    excel_dos_cmp = strip_all_spaces(df_excel["Date of Therapy"])
+
     cnt = 0
     for idx, row in df_excel.iterrows():
         retrieves = df_pdf[
-            (df_pdf["Patient Name"] == row["Weekly pt. tx list"]) &
-            (df_pdf["DOB"] == row["Date of birth"]) &
-            (df_pdf["Diagnosis/CC"] == row["Diagnosis"]) &
+            (pdf_name_cmp == excel_name_cmp.iloc[idx]) &
+            (pdf_dob_cmp == excel_dob_cmp.iloc[idx]) &
+            (pdf_diag_cmp == excel_diag_cmp.iloc[idx]) &
             # (df_pdf["Authorization No"] == row["Authorization number"]) &
-            (df_pdf["DOS"] == row["Date of Therapy"])
+            (pdf_dos_cmp == excel_dos_cmp.iloc[idx])
         ]
         if len(retrieves) == 1:
             retrieve = retrieves.iloc[0]
