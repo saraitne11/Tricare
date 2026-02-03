@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, List, Tuple
 import json
 import argparse
 
-import fitz
+import pdfplumber
 import pandas as pd
 
 HEADER = re.compile(r"Dr\.?\s*Joung[`'’]?s\s*Clinic\s*&\s*Physical\s*Therapy\s*Center")
@@ -29,6 +29,12 @@ target_fields = [
     {"name": "DOS", "pattern": r"\s*DOS\s*"},
     {"name": "Visit No.", "pattern": r"\s*Visit\s*No\s*"}
 ]
+
+TABLE_SETTINGS = {
+    "vertical_strategy": "lines",
+    "horizontal_strategy": "lines",
+    "intersection_y_tolerance": 10,
+}
 
 
 def _ensure_abs_path(path_str: str, kind: str) -> Path:
@@ -173,32 +179,41 @@ def extract_data(df: pd.DataFrame, pdf_path: str) -> dict[Any, Any] | None:
 
 
 def parse_pdf(pdf_path: str) -> List[Dict[str, Any]]:
-    doc = fitz.open(pdf_path)
     data_list = []
-    for i in range(doc.page_count):
-        page = doc[i]
-        tables = page.find_tables()
-        for table in tables:
-            df = table.to_pandas()
-            col_indices = []
-            for k, col in enumerate(df.columns):
-                if HEADER.search(col):
-                    col_indices.append(k)
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            tables = page.extract_tables(table_settings=TABLE_SETTINGS) or []
+            for table in tables:
+                df = pd.DataFrame(table)
+                if df.empty:
+                    continue
 
-            if len(col_indices) >= 2:
-                for c in range(len(col_indices) - 1):
-                    split_df = df.iloc[:, col_indices[c]:col_indices[c + 1]]
+                # Clean up raw cells and promote first row to header to mirror PyMuPDF behavior.
+                df = df.fillna("")
+                df = df.applymap(lambda v: v.replace("\n", " ").strip() if isinstance(v, str) else v)
+                header_row = df.iloc[0].astype(str)
+                df = df.iloc[1:].reset_index(drop=True)
+                df.columns = header_row
+
+                col_indices = []
+                for k, col in enumerate(df.columns):
+                    if HEADER.search(col):
+                        col_indices.append(k)
+
+                if len(col_indices) >= 2:
+                    for c in range(len(col_indices) - 1):
+                        split_df = df.iloc[:, col_indices[c]:col_indices[c + 1]]
+                        d = extract_data(split_df, pdf_path)
+                        if d:
+                            data_list.append(d)
+                    split_df = df.iloc[:, col_indices[-1]:]
                     d = extract_data(split_df, pdf_path)
                     if d:
                         data_list.append(d)
-                split_df = df.iloc[:, col_indices[-1]:]
-                d = extract_data(split_df, pdf_path)
-                if d:
-                    data_list.append(d)
-            else:
-                d = extract_data(df, pdf_path)
-                if d:
-                    data_list.append(d)
+                else:
+                    d = extract_data(df, pdf_path)
+                    if d:
+                        data_list.append(d)
 
     return data_list
 
