@@ -33,7 +33,7 @@ target_fields = [
 TABLE_SETTINGS = {
     "vertical_strategy": "lines",
     "horizontal_strategy": "lines",
-    "intersection_y_tolerance": 10,
+    "intersection_y_tolerance": 7,
 }
 
 
@@ -132,15 +132,26 @@ def extract_data(df: pd.DataFrame, pdf_path: str) -> dict[Any, Any] | None:
             value_str = "" if pd.isna(value_cell) else str(value_cell).replace("\n", "").strip()
             if label_str:
                 candidates.append((label_str, value_str, r, c))
-
+    # for candidate in candidates:
+    #     print(candidate)
     for field in target_fields:
         matched = [
             (val, r, c)
             for (lbl, val, r, c) in candidates
             if re.search(field["pattern"], lbl, flags=re.IGNORECASE)
         ]
-        if matched:
-            extracted_value, row_idx, col_idx = matched[0]
+        # print(field["name"])
+        # print(matched)
+        # print("--------------------------------")   
+        # 값이 비어있는 후보('' 또는 공백 등)는 제외하고 유효한 값만 사용한다.
+        filtered = [(val, r, c) for (val, r, c) in matched if str(val).strip()]
+
+        if filtered:
+            extracted_value, row_idx, col_idx = filtered[0]
+        else:
+            extracted_value = None
+            
+        if extracted_value is not None:
             
             if field["name"] == "DOB":
                 row_data[field["name"]] = convert_dob(extracted_value)
@@ -183,10 +194,15 @@ def parse_pdf(pdf_path: str) -> List[Dict[str, Any]]:
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             tables = page.extract_tables(table_settings=TABLE_SETTINGS) or []
-            for table in tables:
+            for table_idx, table in enumerate(tables):
                 df = pd.DataFrame(table)
+
+                import os
+                base_filename = os.path.splitext(os.path.basename(pdf_path))[0]
+                # df.to_excel(f"{base_filename}_{table_idx}.xlsx", index=False)
+
                 if df.empty:
-                    continue
+                    continue    
 
                 # Clean up raw cells and promote first row to header to mirror PyMuPDF behavior.
                 df = df.fillna("")
@@ -290,22 +306,21 @@ def run_matching(
 
     cnt = 0
     for pos in range(len(df_excel)):
-        base_cond = (
+        auth_val = (
+            excel_auth_cmp.iat[pos]
+            if len(excel_auth_cmp) > pos and pd.notna(excel_auth_cmp.iat[pos])
+            else ""
+        )
+
+        full_cond = (
             (pdf_name_cmp == excel_name_cmp.iat[pos]) &
             (pdf_dob_cmp == excel_dob_cmp.iat[pos]) &
             (pdf_diag_cmp == excel_diag_cmp.iat[pos]) &
-            (pdf_dos_cmp == excel_dos_cmp.iat[pos])
+            (pdf_dos_cmp == excel_dos_cmp.iat[pos]) &
+            (pdf_auth_cmp == auth_val)
         )
 
-        retrieves = df_pdf[base_cond]
-
-        # Authorization No.가 있을 경우 우선적으로 매칭을 시도한다.
-        auth_val = excel_auth_cmp.iat[pos] if len(excel_auth_cmp) > pos else ""
-        if auth_val:
-            auth_retrieves = df_pdf[base_cond & (pdf_auth_cmp == auth_val)]
-            # auth 조건으로 매칭이 하나 이상 있으면 그 결과를 사용
-            if len(auth_retrieves) > 0:
-                retrieves = auth_retrieves
+        retrieves = df_pdf[full_cond]
         if len(retrieves) == 1:
             retrieve = retrieves.iloc[0]
             df_excel.loc[df_excel.index[pos], "Visit No"] = retrieve["Visit No"]

@@ -11,16 +11,32 @@ import streamlit as st
 from processor import run_matching
 
 
-def _to_excel_bytes(df: pd.DataFrame) -> bytes:
+def _safe_sheet_name(name: str | None, fallback: str = "Sheet1") -> str:
+    """Excel sheet names have a 31-char limit and forbid []:*?/\\."""
+    if not name or not str(name).strip():
+        return fallback
+    sanitized = "".join(ch if ch not in r"[]:*?/\\" else "_" for ch in str(name))
+    sanitized = sanitized.strip()
+    return sanitized[:31] or fallback
+
+
+def _to_excel_bytes(df: pd.DataFrame, sheet_name: str | None = None) -> bytes:
     """DataFrame을 엑셀 바이너리로 변환."""
     buffer = io.BytesIO()
+    safe_sheet = _safe_sheet_name(sheet_name)
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False)
+        df.to_excel(writer, index=False, sheet_name=safe_sheet)
     buffer.seek(0)
     return buffer.read()
 
 
-def _render_results(df_pdf: pd.DataFrame, df_excel: pd.DataFrame, matched: int, ts: str | None = None) -> None:
+def _render_results(
+    df_pdf: pd.DataFrame,
+    df_excel: pd.DataFrame,
+    matched: int,
+    ts: str | None = None,
+    sheet_name: str | None = None,
+) -> None:
     st.subheader("결과 요약")
     n_pdf_files = df_pdf["File"].nunique() if "File" in df_pdf.columns else len(df_pdf)
     col1, col2, col3, col4 = st.columns(4)
@@ -38,15 +54,16 @@ def _render_results(df_pdf: pd.DataFrame, df_excel: pd.DataFrame, matched: int, 
 
     st.divider()
     st.subheader("다운로드")
-    pdf_bytes = _to_excel_bytes(df_pdf)
-    excel_bytes = _to_excel_bytes(df_excel)
+    pdf_bytes = _to_excel_bytes(df_pdf, sheet_name="PDF Summary")
+    excel_sheet = _safe_sheet_name(sheet_name, fallback="Merged")
+    excel_bytes = _to_excel_bytes(df_excel, sheet_name=excel_sheet)
     ts = ts or dt.datetime.now().strftime("%Y%m%d%H%M%S")
     col_d1, col_d2 = st.columns(2)
     with col_d1:
         st.download_button(
             "PDF 요약 엑셀 다운로드",
             data=pdf_bytes,
-            file_name=f"pdf_summary_{ts}.xlsx",
+            file_name=f"pdf_summary_{ts}_{excel_sheet}.xlsx" if excel_sheet else f"pdf_summary_{ts}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
@@ -54,7 +71,7 @@ def _render_results(df_pdf: pd.DataFrame, df_excel: pd.DataFrame, matched: int, 
         st.download_button(
             "병합 엑셀 다운로드",
             data=excel_bytes,
-            file_name=f"pt_list_merge_{ts}.xlsx",
+            file_name=f"pt_list_merge_{ts}_{excel_sheet}.xlsx" if excel_sheet else f"pt_list_merge_{ts}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
@@ -280,7 +297,7 @@ def main():
                     progress_cb=on_progress,
                     stop_flag=lambda: st.session_state.get("stop_requested", False),
                 )
-            st.session_state.results = (df_pdf, df_excel, matched)
+            st.session_state.results = (df_pdf, df_excel, matched, sheet_name)
             append_log(f"완료 - 매칭 성공: {matched}건")
         except Exception as e:
             err_msg = f"오류: {e}"
@@ -289,8 +306,14 @@ def main():
             return
 
     if st.session_state.results:
-        df_pdf, df_excel, matched = st.session_state.results
-        _render_results(df_pdf, df_excel, matched, ts=st.session_state.get("run_ts"))
+        df_pdf, df_excel, matched, sheet_name = st.session_state.results
+        _render_results(
+            df_pdf,
+            df_excel,
+            matched,
+            ts=st.session_state.get("run_ts"),
+            sheet_name=sheet_name,
+        )
 
 
 if __name__ == "__main__":
