@@ -52,3 +52,4 @@ pyinstaller --noconfirm --onefile --noconsole `
 - 실행 시 `STREAMLIT_GLOBAL_DEVELOPMENT_MODE`를 자동으로 끄고, `8501` 포트로 고정해 패키징되었습니다.
 - 필요 시 `data/` 등 리소스를 exe와 같은 폴더에 두거나 `--add-data` 옵션으로 포함하세요.
 
+
