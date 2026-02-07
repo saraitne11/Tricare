@@ -34,16 +34,18 @@ def _render_results(
     df_pdf: pd.DataFrame,
     df_excel: pd.DataFrame,
     matched: int,
+    df_pdf_unmatched: pd.DataFrame,
     ts: str | None = None,
     sheet_name: str | None = None,
 ) -> None:
     st.subheader("결과 요약")
     n_pdf_files = df_pdf["File"].nunique() if "File" in df_pdf.columns else len(df_pdf)
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric(label="PDF 파일 수", value=n_pdf_files)
     col2.metric(label="PDF 추출 건수", value=len(df_pdf))
     col3.metric(label="엑셀 행 수", value=len(df_excel))
     col4.metric(label="매칭 성공 건수", value=matched)
+    col5.metric(label="매칭 실패 건수", value=len(df_pdf_unmatched))
 
     st.divider()
     st.subheader("PDF 추출 결과 미리보기")
@@ -57,8 +59,10 @@ def _render_results(
     pdf_bytes = _to_excel_bytes(df_pdf, sheet_name="PDF Summary")
     excel_sheet = _safe_sheet_name(sheet_name, fallback="Merged")
     excel_bytes = _to_excel_bytes(df_excel, sheet_name=excel_sheet)
+    unmatched_sheet = _safe_sheet_name("Unmatched PDF", fallback="Unmatched")
+    pdf_unmatched_bytes = _to_excel_bytes(df_pdf_unmatched, sheet_name=unmatched_sheet)
     ts = ts or dt.datetime.now().strftime("%Y%m%d%H%M%S")
-    col_d1, col_d2 = st.columns(2)
+    col_d1, col_d2, col_d3 = st.columns(3)
     with col_d1:
         st.download_button(
             "PDF 요약 엑셀 다운로드",
@@ -72,6 +76,14 @@ def _render_results(
             "병합 엑셀 다운로드",
             data=excel_bytes,
             file_name=f"pt_list_merge_{ts}_{excel_sheet}.xlsx" if excel_sheet else f"pt_list_merge_{ts}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    with col_d3:
+        st.download_button(
+            "매칭 실패 PDF 추출 다운로드",
+            data=pdf_unmatched_bytes,
+            file_name=f"pdf_unmatched_{ts}_{excel_sheet}.xlsx" if excel_sheet else f"pdf_unmatched_{ts}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
@@ -289,7 +301,7 @@ def main():
 
         try:
             with st.spinner("처리 중..."):
-                df_pdf, df_excel, matched = run_matching(
+                df_pdf, df_excel, matched, df_pdf_unmatched = run_matching(
                     pdf_dir=resolved_pdf_dir,
                     input_xlsx=resolved_xlsx,
                     sheet_name=sheet_name,
@@ -297,7 +309,7 @@ def main():
                     progress_cb=on_progress,
                     stop_flag=lambda: st.session_state.get("stop_requested", False),
                 )
-            st.session_state.results = (df_pdf, df_excel, matched, sheet_name)
+            st.session_state.results = (df_pdf, df_excel, matched, df_pdf_unmatched, sheet_name)
             append_log(f"완료 - 매칭 성공: {matched}건")
         except Exception as e:
             err_msg = f"오류: {e}"
@@ -306,11 +318,12 @@ def main():
             return
 
     if st.session_state.results:
-        df_pdf, df_excel, matched, sheet_name = st.session_state.results
+        df_pdf, df_excel, matched, df_pdf_unmatched, sheet_name = st.session_state.results
         _render_results(
             df_pdf,
             df_excel,
             matched,
+            df_pdf_unmatched,
             ts=st.session_state.get("run_ts"),
             sheet_name=sheet_name,
         )

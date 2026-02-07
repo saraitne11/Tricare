@@ -241,7 +241,7 @@ def run_matching(
     columns: str,
     progress_cb: Callable[[int, int, Path, int], None] | None = None,
     stop_flag: Callable[[], bool] | None = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame, int]:
+) -> Tuple[pd.DataFrame, pd.DataFrame, int, pd.DataFrame]:
     if not pdf_dir:
         raise ValueError("PDF 폴더 경로가 필요합니다.")
     if not input_xlsx:
@@ -305,6 +305,7 @@ def run_matching(
     excel_auth_cmp = strip_all_spaces(df_excel["Authorization number"]) if "Authorization number" in df_excel.columns else pd.Series([""] * len(df_excel), index=df_excel.index)
 
     cnt = 0
+    matched_pdf_indices: set[int] = set()
     for pos in range(len(df_excel)):
         auth_val = (
             excel_auth_cmp.iat[pos]
@@ -325,7 +326,15 @@ def run_matching(
             retrieve = retrieves.iloc[0]
             df_excel.loc[df_excel.index[pos], "Visit No"] = retrieve["Visit No"]
             df_excel.loc[df_excel.index[pos], "File"] = retrieve["File"]
+            matched_pdf_indices.add(retrieve.name)
             cnt += 1
+
+    # Identify PDF rows that were not matched to any Excel row
+    df_pdf_unmatched = (
+        df_pdf.drop(index=list(matched_pdf_indices))
+        if matched_pdf_indices
+        else df_pdf.copy()
+    )
 
     # Drop unused columns and reorder for final output
     drop_cols = [c for c in ("Times", "Therapist") if c in df_excel.columns]
@@ -356,7 +365,7 @@ def run_matching(
     if existing_cols:
         df_excel = df_excel[existing_cols]
 
-    return df_pdf, df_excel, cnt
+    return df_pdf, df_excel, cnt, df_pdf_unmatched
 
 
 def _cli() -> None:
